@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local RAG (100% Offline)</title>
+    <style>
+        :root { --primary: #2563eb; --danger: #ef4444; --bg: #f8fafc; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--bg); max-width: 900px; margin: 0 auto; padding: 20px; color: #1e293b; }
+        
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        h2 { margin-top: 0; font-size: 1.2rem; color: #334155; border-bottom: 1px solid #f1f5f9; padding-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+        
+        #db-status { font-size: 0.8rem; padding: 4px 8px; border-radius: 4px; background: #e2e8f0; color: #64748b; font-weight: normal; }
+        .status-active { background: #dcfce7 !important; color: #166534 !important; }
+
+        .upload-options { margin: 15px 0; display: flex; gap: 20px; align-items: center; background: #f8fafc; padding: 10px; border-radius: 8px; border: 1px solid #e2e8f0;}
+        .upload-area { border: 2px dashed #cbd5e1; padding: 20px; text-align: center; border-radius: 8px; }
+        
+        /* Chat Styles */
+        #chat-box { height: 500px; overflow-y: auto; border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; background: #f8fafc; display: flex; flex-direction: column; gap: 15px; }
+        .msg { padding: 12px 16px; border-radius: 8px; max-width: 85%; line-height: 1.6; }
+        .user { align-self: flex-end; background: var(--primary); color: white; }
+        .bot { align-self: flex-start; background: white; border: 1px solid #e2e8f0; }
+        
+        /* Formatting for the custom parser */
+        .bot strong { font-weight: 700; color: #0f172a; }
+        .bot em { font-style: italic; }
+        .bot code { background: #f1f5f9; padding: 2px 4px; border-radius: 4px; font-family: monospace; font-size: 0.9em; color: #d63384; }
+        .bot pre { background: #1e293b; color: #e2e8f0; padding: 10px; border-radius: 6px; overflow-x: auto; margin: 10px 0; }
+        .bot ul { margin: 5px 0 10px 20px; padding: 0; }
+        .bot li { margin-bottom: 4px; }
+        
+        .sources-box { margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee; font-size: 0.85rem; color: #64748b; }
+        .source-badge { background: #e2e8f0; padding: 2px 6px; border-radius: 4px; margin-right: 5px; font-size: 0.75rem; font-weight: 600; }
+
+        .input-group { display: flex; gap: 10px; margin-top: 10px; }
+        input[type="text"] { flex: 1; padding: 12px; border: 1px solid #cbd5e1; border-radius: 6px; }
+        .btn { padding: 10px 20px; background: var(--primary); color: white; border: none; border-radius: 6px; cursor: pointer; }
+        .btn-danger { background: var(--danger); font-size: 0.8rem; padding: 5px 10px; margin-left: auto; }
+        
+        .cursor { display: inline-block; width: 6px; height: 16px; background: #333; animation: blink 1s infinite; vertical-align: middle; }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="card">
+        <h2>📂 Document Ingestion <span id="db-status">Checking index...</span></h2>
+        <div class="upload-options">
+            <span style="font-weight:600; font-size:0.9rem;">Mode:</span>
+            <div>
+                <input type="radio" id="optAppend" name="ingestMode" value="append" checked> <label for="optAppend">Append</label>
+                <input type="radio" id="optReset" name="ingestMode" value="reset"> <label for="optReset">Overwrite</label>
+            </div>
+            <button class="btn btn-danger" onclick="clearDatabase()">🗑️ Clear DB</button>
+        </div>
+        <div class="upload-area">
+            <input type="file" id="fileInput" multiple accept=".pdf, .png, .jpg, .jpeg">
+            <br><br>
+            <button class="btn" onclick="uploadFiles()" id="uploadBtn">Process Documents</button>
+            <p id="uploadStatus" style="font-size: 0.9rem; margin-top: 10px; color: #64748b;"></p>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>💬 Chat</h2>
+        <div id="chat-box"></div>
+        <div class="input-group">
+            <input type="text" id="questionInput" placeholder="Ask a question..." onkeypress="handleEnter(event)">
+            <button class="btn" onclick="askQuestion()" id="askBtn">Send</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const API_URL = "http://127.0.0.1:8000";
+    window.onload = checkStatus;
+
+    // --- Custom Micro-Markdown Parser (Replaces external library) ---
+    function simpleMarkdown(text) {
+        // 1. Sanitize (Basic)
+        let html = text
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;");
+
+        // 2. Code Blocks (```code```)
+        html = html.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
+
+        // 3. Inline Code (`code`)
+        html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+        // 4. Bold (**text**)
+        html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+
+        // 5. Italic (*text*)
+        html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+
+        // 6. Lists (- item)
+        // This is a simple regex for lists at start of line
+        html = html.replace(/^\s*-\s+(.*)$/gm, '<li>$1</li>');
+        
+        // Wrap adjacent <li> in <ul> (Simple heuristic)
+        // Note: This is imperfect but works for visual streaming
+        html = html.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>'); 
+
+        // 7. Line breaks
+        html = html.replace(/\n/g, '<br>');
+
+        return html;
+    }
+
+    // --- System Logic ---
+    async function checkStatus() {
+        try {
+            const res = await fetch(`${API_URL}/system/status`);
+            const data = await res.json();
+            const badge = document.getElementById('db-status');
+            if(data.index_exists) { badge.innerText = "✅ Index Active"; badge.classList.add("status-active"); } 
+            else { badge.innerText = "⚪ Index Empty"; badge.classList.remove("status-active"); }
+        } catch(e) {}
+    }
+
+    async function clearDatabase() {
+        if(!confirm("Delete all indexes?")) return;
+        await fetch(`${API_URL}/system/clear`, { method: "POST" });
+        alert("Cleared."); checkStatus();
+    }
+
+    async function uploadFiles() {
+        const fileInput = document.getElementById('fileInput');
+        const status = document.getElementById('uploadStatus');
+        const btn = document.getElementById('uploadBtn');
+        const mode = document.querySelector('input[name="ingestMode"]:checked').value;
+
+        if (!fileInput.files.length) return alert("Select files first!");
+        
+        const formData = new FormData();
+        for (let file of fileInput.files) formData.append("files", file);
+        formData.append("action", mode);
+
+        btn.disabled = true; status.innerText = "Processing...";
+        
+        try {
+            const res = await fetch(`${API_URL}/upload`, { method: 'POST', body: formData });
+            const data = await res.json();
+            status.innerText = `✅ Success! Added ${data.chunks} chunks.`;
+            checkStatus();
+        } catch (e) { status.innerText = `❌ Error: ${e.message}`; } 
+        finally { btn.disabled = false; fileInput.value = ""; }
+    }
+
+    // --- Chat Logic ---
+    async function askQuestion() {
+        const input = document.getElementById('questionInput');
+        const chatBox = document.getElementById('chat-box');
+        const btn = document.getElementById('askBtn');
+        const question = input.value.trim();
+
+        if (!question) return;
+
+        chatBox.innerHTML += `<div class="msg user">${question}</div>`;
+        input.value = "";
+        
+        const botMsgDiv = document.createElement('div');
+        botMsgDiv.className = 'msg bot';
+        botMsgDiv.innerHTML = '<span class="cursor"></span>';
+        chatBox.appendChild(botMsgDiv);
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+        btn.disabled = true;
+
+        let fullText = "";
+        let sourcesText = "";
+        let isCollectingSources = false;
+
+        try {
+            const response = await fetch(`${API_URL}/ask`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question })
+            });
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                const chunk = decoder.decode(value, { stream: true });
+                
+                if (chunk.includes("__SOURCES__:")) {
+                    const parts = chunk.split("__SOURCES__:");
+                    fullText += parts[0]; 
+                    isCollectingSources = true;
+                    sourcesText += parts[1]; 
+                } else if (isCollectingSources) {
+                    sourcesText += chunk;
+                } else {
+                    fullText += chunk;
+                }
+
+                // USE CUSTOM FUNCTION HERE
+                botMsgDiv.innerHTML = simpleMarkdown(fullText) + '<span class="cursor"></span>';
+                chatBox.scrollTop = chatBox.scrollHeight;
+            }
+
+            let finalHtml = simpleMarkdown(fullText);
+            
+            if (sourcesText) {
+                try {
+                    const sources = JSON.parse(sourcesText);
+                    if (sources.length > 0) {
+                        const badges = sources.map(s => `<span class="source-badge">${s}</span>`).join("");
+                        finalHtml += `<div class="sources-box">📚 Sources: ${badges}</div>`;
+                    }
+                } catch (e) { console.error("Error parsing sources", e); }
+            }
+            
+            botMsgDiv.innerHTML = finalHtml;
+
+        } catch (e) {
+            botMsgDiv.innerHTML += `<div style="color:red">Error: ${e.message}</div>`;
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    function handleEnter(e) { if (e.key === "Enter") askQuestion(); }
+</script>
+
+</body>
+</html>
