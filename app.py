@@ -1,15 +1,17 @@
 import os
 import shutil
-from typing import List
+import json
+from typing import List, Optional
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse 
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from config import Config
 from ingester import IngestionPipeline
 from rag_engine import RAGEngine
+from history import HistoryManager
 
 app = FastAPI()
 
@@ -25,7 +27,61 @@ rag_engine = RAGEngine()
 
 class QueryRequest(BaseModel):
     question: str
+    session_id: Optional[str] = None
 
+# --- Wrapper for Stream Saving ---
+async def stream_and_save(generator, session_id):
+    """
+    Yields chunks to client immediately, but accumulates them 
+    to save to history file at the end.
+    """
+    full_response = ""
+    sources_data = []
+    
+    async for chunk in generator:
+        # Check if this chunk is the sources block
+        if "__SOURCES__:" in chunk:
+            parts = chunk.split("__SOURCES__:")
+            text_part = parts[0]
+            json_part = parts[1]
+            
+            full_response += text_part
+            yield text_part # Yield text part
+            
+            try:
+                sources_data = json.loads(json_part)
+                # We yield the source marker to frontend so it can render badges
+                yield f"__SOURCES__:{json_part}" 
+            except:
+                pass
+        else:
+            full_response += chunk
+            yield chunk
+
+    # Save to history after stream ends
+    if session_id:
+        HistoryManager.add_message(session_id, "bot", full_response, sources_data)
+
+# --- History Routes ---
+@app.get("/history/list")
+async def list_chats():
+    return HistoryManager.list_sessions()
+
+@app.get("/history/{session_id}")
+async def get_chat(session_id: str):
+    return HistoryManager.load_session(session_id)
+
+@app.delete("/history/{session_id}")
+async def delete_chat(session_id: str):
+    HistoryManager.delete_session(session_id)
+    return {"status": "deleted"}
+
+@app.post("/chat/new")
+async def create_chat():
+    session_id = HistoryManager.create_session()
+    return {"session_id": session_id}
+
+# --- Existing Routes ---
 @app.get("/system/status")
 async def get_system_status():
     path = Config.get_vector_store_path()
@@ -36,7 +92,7 @@ async def get_system_status():
 async def clear_index():
     ingest_pipeline.clear_vector_store()
     rag_engine.vector_store = None 
-    return {"message": "Vector store cleared successfully."}
+    return {"message": "Vector store cleared."}
 
 @app.post("/upload")
 async def upload_files(files: List[UploadFile] = File(...), action: str = Form("append")):
@@ -60,8 +116,19 @@ async def upload_files(files: List[UploadFile] = File(...), action: str = Form("
 
 @app.post("/ask")
 async def ask_question(request: QueryRequest):
+    # 1. Ensure Session Exists
+    sess_id = request.session_id
+    if not sess_id:
+        sess_id = HistoryManager.create_session()
+
+    # 2. Save User Question
+    HistoryManager.add_message(sess_id, "user", request.question)
+
+    # 3. Stream & Save Bot Response
+    generator = rag_engine.answer_question_stream(request.question)
+    
     return StreamingResponse(
-        rag_engine.answer_question_stream(request.question), 
+        stream_and_save(generator, sess_id), 
         media_type="text/plain"
     )
 
