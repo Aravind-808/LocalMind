@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Local RAG Chat</title>
+    
     <style>
         :root { --sidebar-bg: #f3f4f6; --main-bg: #ffffff; --primary: #2563eb; --text: #1f2937; --border: #e5e7eb; }
         * { box-sizing: border-box; }
@@ -45,37 +46,17 @@
         .bot .message-bubble { background: transparent; padding: 0; width: 100%; }
 
         .bot-text p { margin-top: 0; }
-        .bot-text code { padding: 2px 4px; border-radius: 4px; font-family: monospace; color: #000000; }
-        .bot-text pre { background: #d1d4d9; color: #f9fafb; padding: 15px; border-radius: 6px; overflow-x: auto; }
+        .bot-text code { background: #f3f4f6; padding: 2px 4px; border-radius: 4px; font-family: monospace; color: #d63384; }
+        .bot-text pre { background: #1f2937; color: #f9fafb; padding: 15px; border-radius: 6px; overflow-x: auto; }
         .bot-text ul { padding-left: 20px; }
-        /* --- Table Styling --- */
-        .chat-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 15px 0;
-            font-size: 0.9rem;
-            background: white;
-            border: 1px solid #e5e7eb;
-        }
-        .chat-table th, .chat-table td {
-            border: 1px solid #e5e7eb;
-            padding: 8px 12px;
-            text-align: left;
-        }
-        .chat-table th {
-            background-color: #f3f4f6;
-            font-weight: 600;
-            color: #1f2937;
-        }
-        .chat-table tr:nth-child(even) {
-            background-color: #f9fafb;
-        }
-        /* Scroll wrapper for small screens */
-        .table-wrapper {
-            overflow-x: auto;
-            border-radius: 6px;
-            border: 1px solid #e5e7eb;
-        }
+
+        /* Table Styling */
+        .chat-table { width: 100%; border-collapse: collapse; margin: 15px 0; font-size: 0.9rem; background: white; border: 1px solid #e5e7eb; }
+        .chat-table th, .chat-table td { border: 1px solid #e5e7eb; padding: 8px 12px; text-align: left; }
+        .chat-table th { background-color: #f3f4f6; font-weight: 600; color: #1f2937; }
+        .chat-table tr:nth-child(even) { background-color: #f9fafb; }
+        .table-wrapper { overflow-x: auto; border-radius: 6px; border: 1px solid #e5e7eb; }
+
         .sources-section { margin-top: 10px; font-size: 0.8rem; color: #6b7280; border-top: 1px solid #e5e7eb; padding-top: 8px; }
         .source-tag { display: inline-block; background: #e5e7eb; padding: 2px 6px; border-radius: 4px; margin-right: 5px; margin-bottom: 5px; font-weight: 500; }
 
@@ -113,20 +94,19 @@
     <ul class="history-list" id="historyList"></ul>
     <div class="settings-area">
         <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
-            <span>📚 Index Status:</span>
+            <span>📚 Chat Index:</span>
             <span id="indexStatus" style="font-weight:600;">Checking...</span>
         </div>
-        <button class="action-btn" style="width:100%" onclick="openUploadModal()">📂 Manage Documents</button>
+        <button class="action-btn" style="width:100%" onclick="openUploadModal()">Manage Docs</button>
     </div>
 </aside>
 
 <main class="main-content">
     <div class="top-bar">
         <h2 id="currentChatTitle">New Chat</h2>
-        <button class="action-btn" onclick="window.print()">🖨️ Print Conversation</button>
+        <button class="action-btn" onclick="window.print()">Print Conversation</button>
     </div>
     <div id="chat-container">
-        <!-- THIS ID WAS MISSING CAUSING THE ERROR -->
         <div style="text-align:center; color:#9ca3af; margin-top:50px;" id="emptyState">
             <p>Select a document and ask a question to begin.</p>
         </div>
@@ -163,20 +143,14 @@
 
     window.onload = async () => {
         try {
-            await checkIndexStatus();
             await loadHistoryList();
             await createNewChat();
-        } catch(e) {
-            console.error("Initialization Failed:", e);
-        }
+        } catch(e) { console.error("Initialization Failed:", e); }
     };
 
-    // --- Helper to safely hide Empty State ---
     function toggleEmptyState(show) {
         const el = document.getElementById('emptyState');
-        if (el) {
-            el.style.display = show ? 'block' : 'none';
-        }
+        if (el) el.style.display = show ? 'block' : 'none';
     }
 
     async function loadHistoryList() {
@@ -206,7 +180,6 @@
             currentSessionId = data.session_id;
             document.getElementById('chat-container').innerHTML = '';
             
-            // Re-inject the empty state div if it was lost
             const container = document.getElementById('chat-container');
             container.innerHTML = `
                 <div style="text-align:center; color:#9ca3af; margin-top:50px;" id="emptyState">
@@ -214,7 +187,8 @@
                 </div>`;
 
             document.getElementById('currentChatTitle').innerText = "New Chat";
-            toggleEmptyState(true); // Safely show it
+            toggleEmptyState(true);
+            checkIndexStatus(); 
             loadHistoryList();
         } catch(e) { console.error(e); }
     }
@@ -228,7 +202,6 @@
         const container = document.getElementById('chat-container');
         container.innerHTML = "";
         
-        // Re-inject empty state for future use
         container.innerHTML += `
             <div style="text-align:center; color:#9ca3af; margin-top:50px; display:none;" id="emptyState">
                 <p>Select a document and ask a question to begin.</p>
@@ -240,20 +213,20 @@
              toggleEmptyState(false);
              data.messages.forEach(msg => renderMessage(msg.role, msg.content, msg.sources));
         }
+        checkIndexStatus(); // Check for THIS chat
         loadHistoryList(); 
     }
 
     async function deleteChat(e, sessId) {
         e.stopPropagation();
-        if(!confirm("Delete this chat?")) return;
+        if(!confirm("Delete this chat and its documents?")) return;
         await fetch(`${API_URL}/history/${sessId}`, { method: "DELETE" });
         if(currentSessionId === sessId) createNewChat();
         else loadHistoryList();
     }
 
     function renderMessage(role, text, sources=null) {
-        toggleEmptyState(false); // Safely hide it
-
+        toggleEmptyState(false);
         const container = document.getElementById('chat-container');
         const isBot = role === 'bot';
         const div = document.createElement('div');
@@ -264,7 +237,7 @@
         
         if (sources && sources.length > 0) {
             const badges = sources.map(s => `<span class="source-tag">${s}</span>`).join("");
-            contentHtml += `<div class="sources-section">📚 Sources: ${badges}</div>`;
+            contentHtml += `<div class="sources-section">Sources: ${badges}</div>`;
         }
 
         div.innerHTML = `
@@ -342,7 +315,7 @@
                 try {
                     const srcData = JSON.parse(sourcesText);
                     const badges = srcData.map(s => `<span class="source-tag">${s}</span>`).join("");
-                    finalHtml += `<div class="sources-section">📚 Sources: ${badges}</div>`;
+                    finalHtml += `<div class="sources-section">Sources: ${badges}</div>`;
                 } catch(e) {}
             }
             textDiv.innerHTML = finalHtml;
@@ -358,61 +331,38 @@
 
     function handleEnter(e) { if(e.key === "Enter") sendMessage(); }
 
-// --- Robust Markdown Parser ---
     function simpleMarkdown(text) {
         if (!text) return "";
+        let output = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-        // 1. Sanitize HTML tags to prevent injection
-        let output = text
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;");
-
-        // 2. Extract and format Code Blocks (PRE/CODE) first to protect them
-        // We replace them with placeholders to avoid messing up tables inside code
         const codeBlocks = [];
         output = output.replace(/```([\s\S]*?)```/g, (match, code) => {
             codeBlocks.push(`<pre><code>${code}</code></pre>`);
             return `__CODEBLOCK_${codeBlocks.length - 1}__`;
         });
 
-        // 3. Line-by-Line Table & List Parsing
         const lines = output.split('\n');
         let finalHtml = "";
         let tableBuffer = [];
         let inList = false;
 
-        // Helper to render a buffered table
         function flushTable() {
             if (tableBuffer.length === 0) return;
-
-            // Determine if valid table (needs at least 1 row with pipes)
-            // Find the separator row (e.g. |---| or | :--- |)
             const sepIndex = tableBuffer.findIndex(row => /^[\|\s\-:]+$/.test(row) && row.includes('-'));
             
             if (sepIndex === -1 && tableBuffer.length < 2) {
-                // Not a table, just lines of text
                 finalHtml += tableBuffer.join('<br>') + '<br>';
             } else {
-                // It is a table!
                 finalHtml += '<div class="table-wrapper"><table class="chat-table">';
                 tableBuffer.forEach((row, i) => {
-                    if (i === sepIndex) return; // Skip the separator row
-
-                    // Split by pipe
+                    if (i === sepIndex) return;
                     let cols = row.split('|').map(c => c.trim());
-                    // Remove empty start/end if they exist (common in markdown tables)
                     if (cols[0] === '') cols.shift();
                     if (cols[cols.length-1] === '') cols.pop();
-
                     finalHtml += '<tr>';
-                    // If this row is BEFORE the separator, it's a Header
                     const isHeader = sepIndex > -1 && i < sepIndex;
                     const tag = isHeader ? 'th' : 'td';
-
-                    cols.forEach(col => {
-                         finalHtml += `<${tag}>${applyInlineFormatting(col)}</${tag}>`;
-                    });
+                    cols.forEach(col => { finalHtml += `<${tag}>${applyInlineFormatting(col)}</${tag}>`; });
                     finalHtml += '</tr>';
                 });
                 finalHtml += '</table></div>';
@@ -422,52 +372,43 @@
 
         lines.forEach(line => {
             const trimmed = line.trim();
-
-            // Detect Table Line (Starts and Ends with |)
             if (trimmed.startsWith('|') && (trimmed.endsWith('|') || trimmed.split('|').length > 2)) {
-                if (inList) { finalHtml += "</ul>"; inList = false; } // Close list if open
+                if (inList) { finalHtml += "</ul>"; inList = false; }
                 tableBuffer.push(trimmed);
-            } 
-            // Detect List Item
-            else if (trimmed.match(/^\s*-\s+/)) {
-                flushTable(); // Close table if open
+            } else if (trimmed.match(/^\s*-\s+/)) {
+                flushTable();
                 if (!inList) { finalHtml += "<ul>"; inList = true; }
                 finalHtml += `<li>${applyInlineFormatting(trimmed.replace(/^\s*-\s+/, ''))}</li>`;
-            }
-            // Standard Line
-            else {
-                flushTable(); // Close table if open
-                if (inList) { finalHtml += "</ul>"; inList = false; } // Close list if open
+            } else {
+                flushTable();
+                if (inList) { finalHtml += "</ul>"; inList = false; }
                 finalHtml += applyInlineFormatting(line) + '<br>';
             }
         });
-
-        flushTable(); // Final flush
+        flushTable();
         if (inList) finalHtml += "</ul>";
-
-        // 4. Restore Code Blocks
         output = finalHtml.replace(/__CODEBLOCK_(\d+)__/g, (match, index) => codeBlocks[index]);
-
         return output;
     }
 
-    // Helper for Bold, Italic, Inline Code
     function applyInlineFormatting(text) {
         return text
-            .replace(/`([^`]+)`/g, '<code>$1</code>')        // Inline Code
-            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Bold
-            .replace(/\*(.*?)\*/g, '<em>$1</em>');            // Italic
+            .replace(/`([^`]+)`/g, '<code>$1</code>')
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.*?)\*/g, '<em>$1</em>');
     }
 
     function openUploadModal() { document.getElementById('uploadModal').style.display = 'flex'; }
     function closeUploadModal() { document.getElementById('uploadModal').style.display = 'none'; }
     
     async function checkIndexStatus() {
+        if (!currentSessionId) return;
         try {
-            const res = await fetch(`${API_URL}/system/status`);
+            // Check status for THIS session only
+            const res = await fetch(`${API_URL}/system/status/${currentSessionId}`);
             const data = await res.json();
             const statusSpan = document.getElementById('indexStatus');
-            statusSpan.innerText = data.index_exists ? "✅ Active" : "⚪ Empty";
+            statusSpan.innerText = data.index_exists ? "Active" : "Empty";
             statusSpan.style.color = data.index_exists ? "green" : "gray";
         } catch(e) { console.error("Status check failed", e); }
     }
@@ -483,6 +424,7 @@
         const formData = new FormData();
         for (let f of fileInput.files) formData.append("files", f);
         formData.append("action", mode);
+        formData.append("session_id", currentSessionId); 
 
         btn.disabled = true; status.innerText = "Ingesting...";
         try {
@@ -495,8 +437,8 @@
     }
 
     async function clearDB() {
-        if(!confirm("Clear all vector data?")) return;
-        await fetch(`${API_URL}/system/clear`, { method: "POST" });
+        if(!confirm("Clear documents for this chat?")) return;
+        await fetch(`${API_URL}/system/clear/${currentSessionId}`, { method: "POST" });
         alert("Cleared"); checkIndexStatus();
     }
 </script>

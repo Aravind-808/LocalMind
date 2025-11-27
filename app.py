@@ -27,42 +27,30 @@ rag_engine = RAGEngine()
 
 class QueryRequest(BaseModel):
     question: str
-    session_id: Optional[str] = None
+    session_id: str 
 
-# --- Wrapper for Stream Saving ---
 async def stream_and_save(generator, session_id):
-    """
-    Yields chunks to client immediately, but accumulates them 
-    to save to history file at the end.
-    """
     full_response = ""
     sources_data = []
     
     async for chunk in generator:
-        # Check if this chunk is the sources block
         if "__SOURCES__:" in chunk:
             parts = chunk.split("__SOURCES__:")
             text_part = parts[0]
             json_part = parts[1]
-            
             full_response += text_part
-            yield text_part # Yield text part
-            
+            yield text_part
             try:
                 sources_data = json.loads(json_part)
-                # We yield the source marker to frontend so it can render badges
                 yield f"__SOURCES__:{json_part}" 
-            except:
-                pass
+            except: pass
         else:
             full_response += chunk
             yield chunk
 
-    # Save to history after stream ends
     if session_id:
         HistoryManager.add_message(session_id, "bot", full_response, sources_data)
 
-# --- History Routes ---
 @app.get("/history/list")
 async def list_chats():
     return HistoryManager.list_sessions()
@@ -74,6 +62,7 @@ async def get_chat(session_id: str):
 @app.delete("/history/{session_id}")
 async def delete_chat(session_id: str):
     HistoryManager.delete_session(session_id)
+    ingest_pipeline.clear_vector_store(session_id)
     return {"status": "deleted"}
 
 @app.post("/chat/new")
@@ -81,21 +70,24 @@ async def create_chat():
     session_id = HistoryManager.create_session()
     return {"session_id": session_id}
 
-# --- Existing Routes ---
-@app.get("/system/status")
-async def get_system_status():
-    path = Config.get_vector_store_path()
+@app.get("/system/status/{session_id}")
+async def get_index_status(session_id: str):
+    """Check if index exists for THIS session"""
+    path = ingest_pipeline.get_session_index_path(session_id)
     exists = os.path.exists(path) and os.path.exists(f"{path}/index.faiss")
     return {"index_exists": exists}
 
-@app.post("/system/clear")
-async def clear_index():
-    ingest_pipeline.clear_vector_store()
-    rag_engine.vector_store = None 
-    return {"message": "Vector store cleared."}
+@app.post("/system/clear/{session_id}")
+async def clear_index(session_id: str):
+    ingest_pipeline.clear_vector_store(session_id)
+    return {"message": "Session index cleared."}
 
 @app.post("/upload")
-async def upload_files(files: List[UploadFile] = File(...), action: str = Form("append")):
+async def upload_files(
+    files: List[UploadFile] = File(...), 
+    action: str = Form("append"),
+    session_id: str = Form(...)
+):
     saved_paths = []
     for file in files:
         file_path = os.path.join(Config.UPLOAD_DIR, file.filename)
@@ -105,9 +97,7 @@ async def upload_files(files: List[UploadFile] = File(...), action: str = Form("
     
     should_reset = (action == "reset")
     try:
-        result = ingest_pipeline.ingest(saved_paths, reset_index=should_reset)
-        if should_reset:
-            rag_engine.vector_store = None
+        result = ingest_pipeline.ingest(saved_paths, session_id, reset_index=should_reset)
         for path in saved_paths:
             os.remove(path)
         return result
@@ -116,16 +106,14 @@ async def upload_files(files: List[UploadFile] = File(...), action: str = Form("
 
 @app.post("/ask")
 async def ask_question(request: QueryRequest):
-    # 1. Ensure Session Exists
     sess_id = request.session_id
-    if not sess_id:
-        sess_id = HistoryManager.create_session()
-
-    # 2. Save User Question
+    
     HistoryManager.add_message(sess_id, "user", request.question)
 
-    # 3. Stream & Save Bot Response
-    generator = rag_engine.answer_question_stream(request.question)
+    session_data = HistoryManager.load_session(sess_id)
+    recent_history = session_data["messages"][-8:] if session_data else []
+
+    generator = rag_engine.answer_question_stream(request.question, sess_id, recent_history)
     
     return StreamingResponse(
         stream_and_save(generator, sess_id), 
